@@ -1,5 +1,11 @@
-from torch.utils.data import DataLoader
+import os
+
+import certifi
+from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
+
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
 
 def get_transforms(train: bool = True) -> transforms.Compose:
@@ -30,6 +36,8 @@ def get_dataloaders(
     data_dir: str,
     batch_size: int = 64,
     num_workers: int = 2,
+    max_train_samples: int | None = None,
+    max_val_samples: int | None = None,
 ) -> tuple[DataLoader, DataLoader]:
     train_dataset = datasets.CIFAR10(
         root=data_dir,
@@ -43,6 +51,13 @@ def get_dataloaders(
         download=True,
         transform=get_transforms(train=False),
     )
+
+    if max_train_samples is not None and max_train_samples < len(train_dataset):
+        train_dataset = Subset(train_dataset, range(max_train_samples))
+
+    if max_val_samples is not None and max_val_samples < len(val_dataset):
+        val_dataset = Subset(val_dataset, range(max_val_samples))
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,

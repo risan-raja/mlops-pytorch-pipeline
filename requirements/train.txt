@@ -1,0 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+pyyaml>=6.0.2
+pytest>=8.3.4
