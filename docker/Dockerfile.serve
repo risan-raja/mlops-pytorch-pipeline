@@ -1,0 +1,49 @@
+
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+
+WORKDIR /app
+
+# Enable bytecode compilation for faster startup
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
+
+
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
+
+
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Install curl for HEALTHCHECK instruction
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+
+COPY --from=builder /app/.venv /app/.venv
+
+
+COPY src/ ./src/
+
+# As per assignment rules to create a non root user
+RUN useradd -m -u 10001 appuser && \
+    mkdir -p /app/checkpoints && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
+ENV MODEL_PATH=/app/checkpoints/classifier_v1.pt
+
+EXPOSE 8080
+# FastAPI documentation
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["uvicorn", "serve:app", "--host", "0.0.0.0", "--port", "8080", "--app-dir", "src"]
