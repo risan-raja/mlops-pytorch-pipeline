@@ -21,24 +21,52 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: torch.device,
+    epoch: int,
+    log_interval: int | None = None,
 ) -> tuple[float, float]:
     model.train()
     total_loss = 0.0
     correct = 0
     total = 0
-    for inputs, targets in loader:
+    running_loss = 0.0
+    running_correct = 0
+    running_total = 0
+
+    for batch_idx, (inputs, targets) in enumerate(loader):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
         outputs = model(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
-        total_loss += loss.item() * inputs.size(0)
+
+        batch_size = inputs.size(0)
+        total_loss += loss.item() * batch_size
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
-    avg_loss = total_loss / total
-    accuracy = correct / total
+
+        if log_interval:
+            running_loss += loss.item() * batch_size
+            running_total += targets.size(0)
+            running_correct += predicted.eq(targets).sum().item()
+
+            if (batch_idx + 1) % log_interval == 0:
+                step_log = {
+                    "event": "step_progress",
+                    "epoch": epoch + 1,
+                    "batch": batch_idx + 1,
+                    "total_batches": len(loader),
+                    "step_loss": round(running_loss / running_total, 4),
+                    "step_accuracy": round(running_correct / running_total, 4),
+                }
+                print(json.dumps(step_log), flush=True)
+                running_loss = 0.0
+                running_correct = 0
+                running_total = 0
+
+    avg_loss = total_loss / total if total > 0 else 0.0
+    accuracy = correct / total if total > 0 else 0.0
     return avg_loss, accuracy
 
 
@@ -61,8 +89,8 @@ def evaluate(
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
-    avg_loss = total_loss / total
-    accuracy = correct / total
+    avg_loss = total_loss / total if total > 0 else 0.0
+    accuracy = correct / total if total > 0 else 0.0
     return avg_loss, accuracy
 
 
@@ -103,25 +131,38 @@ def main():
         architecture=config["model"]["architecture"],
         num_classes=config["model"]["num_classes"],
     ).to(device)
+
+    data_cfg = config.get("data", {})
+    training_cfg = config.get("training", {})
+
     train_loader, val_loader = get_dataloaders(
-        data_dir=config["data"]["data_dir"],
-        batch_size=config["training"]["batch_size"],
+        data_dir=data_cfg.get("data_dir", "./data"),
+        batch_size=training_cfg.get("batch_size", 64),
+        max_train_samples=training_cfg.get("max_train_samples"),
+        max_val_samples=training_cfg.get("max_val_samples"),
     )
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=config["training"]["learning_rate"],
+        lr=training_cfg.get("learning_rate", 0.001),
     )
     criterion = nn.CrossEntropyLoss()
 
     best_val_loss = float("inf")
     patience_counter = 0
-    patience = config["training"]["early_stopping_patience"]
+    patience = training_cfg.get("early_stopping_patience", 3)
+    log_interval = training_cfg.get("log_interval")
     checkpoint_dir = Path(config["output"]["checkpoint_dir"])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    for epoch in range(config["training"]["epochs"]):
+    for epoch in range(training_cfg.get("epochs", 10)):
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, optimizer, criterion, device
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            epoch=epoch,
+            log_interval=log_interval,
         )
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
         log_entry = {
