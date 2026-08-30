@@ -1,9 +1,10 @@
 import json
-import sys
 from pathlib import Path
+
 import torch
-import torch.nn as nn
 import yaml
+from torch import nn
+
 from dataset import get_dataloaders
 from model import get_model
 
@@ -105,20 +106,34 @@ def main():
             best_val_loss = val_loss
             patience_counter = 0
             save_path = checkpoint_dir / config["output"]["model_name"]
-            torch.save({
-                "epoch": epoch + 1,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "val_loss": val_loss,
-                "val_accuracy": val_acc,
-            }, save_path)
-            print(json.dumps({"event": "checkpoint_saved", "path": str(save_path)}), flush=True)
+            torch.save(
+                {
+                    "epoch": epoch + 1,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "val_loss": val_loss,
+                    "val_accuracy": val_acc,
+                },
+                save_path,
+            )
+            print(
+                json.dumps({"event": "checkpoint_saved", "path": str(save_path)}),
+                flush=True,
+            )
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                print(json.dumps({"event": "early_stopping", "epoch": epoch + 1}), flush=True)
+                print(
+                    json.dumps({"event": "early_stopping", "epoch": epoch + 1}),
+                    flush=True,
+                )
                 break
-    print(json.dumps({"event": "training_complete", "best_val_loss": round(best_val_loss, 4)}), flush=True)
+    print(
+        json.dumps(
+            {"event": "training_complete", "best_val_loss": round(best_val_loss, 4)}
+        ),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
