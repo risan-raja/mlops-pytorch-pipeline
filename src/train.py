@@ -1,9 +1,11 @@
 import json
-import sys
+import os
 from pathlib import Path
+
 import torch
-import torch.nn as nn
 import yaml
+from torch import nn
+
 from dataset import get_dataloaders
 from model import get_model
 
@@ -19,11 +21,17 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: torch.device,
+    epoch: int,
+    log_interval: int | None = None,
 ) -> tuple[float, float]:
     model.train()
     total_loss = 0.0
     correct = 0
     total = 0
+    running_loss = 0.0
+    running_correct = 0
+    running_total = 0
+
     for batch_idx, (inputs, targets) in enumerate(loader):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
@@ -31,12 +39,34 @@ def train_one_epoch(
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
-        total_loss += loss.item() * inputs.size(0)
+
+        batch_size = inputs.size(0)
+        total_loss += loss.item() * batch_size
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
-    avg_loss = total_loss / total
-    accuracy = correct / total
+
+        if log_interval:
+            running_loss += loss.item() * batch_size
+            running_total += targets.size(0)
+            running_correct += predicted.eq(targets).sum().item()
+
+            if (batch_idx + 1) % log_interval == 0:
+                step_log = {
+                    "event": "step_progress",
+                    "epoch": epoch + 1,
+                    "batch": batch_idx + 1,
+                    "total_batches": len(loader),
+                    "step_loss": round(running_loss / running_total, 4),
+                    "step_accuracy": round(running_correct / running_total, 4),
+                }
+                print(json.dumps(step_log), flush=True)
+                running_loss = 0.0
+                running_correct = 0
+                running_total = 0
+
+    avg_loss = total_loss / total if total > 0 else 0.0
+    accuracy = correct / total if total > 0 else 0.0
     return avg_loss, accuracy
 
 
@@ -59,38 +89,80 @@ def evaluate(
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
-    avg_loss = total_loss / total
-    accuracy = correct / total
+    avg_loss = total_loss / total if total > 0 else 0.0
+    accuracy = correct / total if total > 0 else 0.0
     return avg_loss, accuracy
 
 
+def get_config_path() -> Path:
+    config_env = os.environ.get("CONFIG_PATH")
+    if config_env and Path(config_env).exists():
+        return Path(config_env)
+
+    container_path = Path("/app/configs/training_config.yaml")
+    if container_path.exists():
+        return container_path
+
+    local_path = Path("configs/training_config.yaml")
+    if local_path.exists():
+        return local_path
+
+    raise FileNotFoundError(
+        "Training configuration file not found in environment, /app/configs, or configs/"
+    )
+
+
 def main():
-    config_path = Path("/app/configs/training_config.yaml")
-    if not config_path.exists():
-        config_path = Path("configs/training_config.yaml")
+    config_path = get_config_path()
     config = load_config(str(config_path))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(
+        json.dumps(
+            {
+                "event": "training_start",
+                "device": str(device),
+                "config_path": str(config_path),
+            }
+        ),
+        flush=True,
+    )
+
     model = get_model(
         architecture=config["model"]["architecture"],
         num_classes=config["model"]["num_classes"],
     ).to(device)
+
+    data_cfg = config.get("data", {})
+    training_cfg = config.get("training", {})
+
     train_loader, val_loader = get_dataloaders(
-        data_dir=config["data"]["data_dir"],
-        batch_size=config["training"]["batch_size"],
+        data_dir=data_cfg.get("data_dir", "./data"),
+        batch_size=training_cfg.get("batch_size", 64),
+        max_train_samples=training_cfg.get("max_train_samples"),
+        max_val_samples=training_cfg.get("max_val_samples"),
     )
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=config["training"]["learning_rate"],
+        lr=training_cfg.get("learning_rate", 0.001),
     )
     criterion = nn.CrossEntropyLoss()
+
     best_val_loss = float("inf")
     patience_counter = 0
-    patience = config["training"]["early_stopping_patience"]
+    patience = training_cfg.get("early_stopping_patience", 3)
+    log_interval = training_cfg.get("log_interval")
     checkpoint_dir = Path(config["output"]["checkpoint_dir"])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    for epoch in range(config["training"]["epochs"]):
+
+    for epoch in range(training_cfg.get("epochs", 10)):
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, optimizer, criterion, device
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            epoch=epoch,
+            log_interval=log_interval,
         )
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
         log_entry = {
@@ -101,24 +173,42 @@ def main():
             "val_accuracy": round(val_acc, 4),
         }
         print(json.dumps(log_entry), flush=True)
+
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
             save_path = checkpoint_dir / config["output"]["model_name"]
-            torch.save({
-                "epoch": epoch + 1,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "val_loss": val_loss,
-                "val_accuracy": val_acc,
-            }, save_path)
-            print(json.dumps({"event": "checkpoint_saved", "path": str(save_path)}), flush=True)
+            torch.save(
+                {
+                    "epoch": epoch + 1,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "val_loss": val_loss,
+                    "val_accuracy": val_acc,
+                    "architecture": config["model"]["architecture"],
+                    "num_classes": config["model"]["num_classes"],
+                },
+                save_path,
+            )
+            print(
+                json.dumps({"event": "checkpoint_saved", "path": str(save_path)}),
+                flush=True,
+            )
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                print(json.dumps({"event": "early_stopping", "epoch": epoch + 1}), flush=True)
+                print(
+                    json.dumps({"event": "early_stopping", "epoch": epoch + 1}),
+                    flush=True,
+                )
                 break
-    print(json.dumps({"event": "training_complete", "best_val_loss": round(best_val_loss, 4)}), flush=True)
+
+    print(
+        json.dumps(
+            {"event": "training_complete", "best_val_loss": round(best_val_loss, 4)}
+        ),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
