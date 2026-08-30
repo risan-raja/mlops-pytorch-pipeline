@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments & package managers
+.venv/
+env/
+venv/
+ENV/
+.uv/
+
+# Data and checkpoints (do not commit datasets or model weights)
+data/
+checkpoints/
+*.pt
+*.pth
+*.bin
+*.onnx
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+*.tmp
+
+# Environment & Secrets
+.env
+*.env
+secrets/
+*.pem
+*.key
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
